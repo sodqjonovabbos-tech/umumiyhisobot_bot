@@ -530,11 +530,13 @@ async def unknown(message: Message):
 async def main():
     await init_db()
     bot = Bot(BOT_TOKEN)
+    # Boshqa deploy/webhook/pending update muammolarini tozalaydi
+    await bot.delete_webhook(drop_pending_updates=True)
     asyncio.create_task(auto_excel_sender(bot))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     print('✅ Moliyaviy nazorat bot ishga tushdi...')
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 if __name__ == '__main__':
     asyncio.run(main())
