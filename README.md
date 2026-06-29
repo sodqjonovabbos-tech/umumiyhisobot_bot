@@ -16,3 +16,6 @@ pip install -r requirements.txt
 copy .env.example .env
 notepad .env
 python main.py
+
+
+Railway uchun qo'shimcha tuzatish: summalar BIGINT qilindi, katta summalarda PostgreSQL xato bermaydi. `runtime.txt` Python 3.11.9 ni majburiy ishlatadi.
