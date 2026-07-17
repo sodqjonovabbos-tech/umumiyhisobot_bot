@@ -23,9 +23,10 @@ from app.database.models import Income, Expense, Debt, DebtPayment
 router = Router()
 
 EXPENSE_CATEGORIES = [
-    "Soliq", "Kommunal to'lov", "Sovg'a", "Ehson", "Odamlarga qarzga berdim",
-    "O'qishga", "Sayohatga", "Shtraflarga", "Ovqat ko'cha", "Uyga produkt",
-    "Bolalar uchun", "Maktabga", "Mashinaga", "Tualetniy bumaga", "Boshqa xarajat"
+    "Soliq", "Kommunal to'lov", "Onamga", "Xotinimga", "Sovg'a va ehson",
+    "Odamlarga qarzga berdim", "O'qishga", "Sayohatga", "Shtraflarga",
+    "Ovqat ko'cha", "Uyga produkt", "Bolalar uchun", "Maktabga",
+    "Mashinaga", "Tualetniy bumaga", "Boshqa xarajat"
 ]
 INCOME_SOURCES = ["Oylik", "Biznes", "Qaytgan qarz", "Sovg'a pul", "Boshqa kirim"]
 
