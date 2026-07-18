@@ -351,7 +351,12 @@ async def debt_person(message: Message, state: FSMContext):
 async def debt_name(message: Message, state: FSMContext):
     await state.update_data(name=message.text)
     await state.set_state(AddDebt.amount)
-    await message.answer("Umumiy qarz summasini yozing. Masalan: 100000000")
+    data = await state.get_data()
+    if data.get('debt_type') == 'berdim':
+        prompt = "Qancha qarz berdingiz? Summani yozing. Masalan: 1000000"
+    else:
+        prompt = "Umumiy qarz summasini yozing. Masalan: 100000000"
+    await message.answer(prompt)
 
 
 @router.message(AddDebt.amount)
@@ -362,7 +367,12 @@ async def debt_amount(message: Message, state: FSMContext):
         return
     await state.update_data(amount=amount)
     await state.set_state(AddDebt.note)
-    await message.answer("Nega qarz oldingiz? Izoh yozing. Masalan: Mashina boshlang'ich to'lovi uchun")
+    data = await state.get_data()
+    if data.get('debt_type') == 'berdim':
+        prompt = "Nega qarz berdingiz? Izoh yozing. Masalan: Vaqtincha yordam uchun"
+    else:
+        prompt = "Nega qarz oldingiz? Izoh yozing. Masalan: Mashina boshlang'ich to'lovi uchun"
+    await message.answer(prompt)
 
 
 @router.message(AddDebt.note)
@@ -472,24 +482,40 @@ async def debt_pay_start(call: CallbackQuery, state: FSMContext):
         return
 
     people = await active_borrowed_people()
-    if not people:
-        await call.message.answer("Hozir qarz beradigan odam yo'q. Faol qarzlaringiz mavjud emas.")
-        await call.answer()
-        return
-
     kb = InlineKeyboardBuilder()
     for index, item in enumerate(people):
         kb.button(
             text=f"👤 {item['person']} — {money(item['remaining'])}",
             callback_data=f"pay_person:{index}"
         )
+
+    # Ro'yxatda yo'q yangi odamga qarz berish uchun alohida tugma.
+    kb.button(text="➕ Boshqa", callback_data="debt_lend_other")
     kb.adjust(1)
+
     await state.update_data(debt_people=people)
     await state.set_state(PayDebt.person)
-    await call.message.answer(
-        "Kimga qarz berdingiz?\n\nQarzingiz bor odamni tanlang:",
-        reply_markup=kb.as_markup()
-    )
+    if people:
+        text = "Kimga qarz berdingiz?\n\nQarzingiz bor odamni tanlang yoki boshqa odamni kiriting:"
+    else:
+        text = (
+            "Hozir siz qarz qaytaradigan odamlar ro'yxati bo'sh.\n\n"
+            "Yangi odamga qarz berish uchun «➕ Boshqa» tugmasini bosing."
+        )
+    await call.message.answer(text, reply_markup=kb.as_markup())
+    await call.answer()
+
+
+@router.callback_query(F.data == 'debt_lend_other')
+async def debt_lend_other(call: CallbackQuery, state: FSMContext):
+    if not call.from_user or call.from_user.id != OWNER_ID:
+        await call.answer("Bu amal siz uchun ruxsat etilmagan.", show_alert=True)
+        return
+
+    await state.clear()
+    await state.update_data(debt_type='berdim')
+    await state.set_state(AddDebt.person)
+    await call.message.answer("Kimga qarz berdingiz? Ismini yozing. Masalan: Ulug'bek")
     await call.answer()
 
 
