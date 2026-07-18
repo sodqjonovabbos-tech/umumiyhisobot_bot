@@ -25,7 +25,7 @@ router = Router()
 EXPENSE_CATEGORIES = [
     "Soliq", "Kommunal to'lov", "Onamga", "Xotinimga", "Sovg'a va ehson",
     "Odamlarga qarzga berdim", "O'qishga", "Sayohatga", "Shtraflarga",
-    "Ovqat ko'cha", "Uyga produkt", "Bolalar uchun", "Maktabga",
+    "Ovqat ko'cha", "Uyga", "Bolalar uchun", "Maktabga",
     "Mashinaga", "Tualetniy bumaga", "Boshqa xarajat"
 ]
 INCOME_SOURCES = ["Oylik", "Biznes", "Qaytgan qarz", "Sovg'a pul", "Boshqa kirim"]
@@ -113,7 +113,17 @@ async def start(message: Message):
 async def add_income_start(message: Message, state: FSMContext):
     if not owner_only(message): return
     await state.set_state(AddIncome.source)
-    await message.answer("Kirim manbasini tanlang:", reply_markup=inline_list('income_source', INCOME_SOURCES))
+    await message.answer(
+        "Kirim manbasini tanlang:\n\nOrqaga qaytish uchun /back yozing.",
+        reply_markup=inline_list('income_source', INCOME_SOURCES)
+    )
+
+
+@router.message(AddIncome.source, F.text.casefold() == "/back")
+async def income_source_back(message: Message, state: FSMContext):
+    if not owner_only(message): return
+    await state.clear()
+    await message.answer("⬅️ Bosh menyuga qaytdingiz.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data.startswith('income_source:'))
@@ -121,8 +131,18 @@ async def income_source(call: CallbackQuery, state: FSMContext):
     source = call.data.split(':', 1)[1]
     await state.update_data(source=source)
     await state.set_state(AddIncome.amount)
-    await call.message.answer("Qancha pul tushdi? Masalan: 5000000")
+    await call.message.answer("Qancha pul tushdi? Masalan: 5000000\n\nOrqaga qaytish uchun /back yozing.")
     await call.answer()
+
+
+@router.message(AddIncome.amount, F.text.casefold() == "/back")
+async def income_amount_back(message: Message, state: FSMContext):
+    if not owner_only(message): return
+    await state.set_state(AddIncome.source)
+    await message.answer(
+        "⬅️ Kirim manbasini qayta tanlang:",
+        reply_markup=inline_list('income_source', INCOME_SOURCES)
+    )
 
 
 @router.message(AddIncome.amount)
@@ -133,7 +153,14 @@ async def income_amount(message: Message, state: FSMContext):
         return
     await state.update_data(amount=amount)
     await state.set_state(AddIncome.note)
-    await message.answer("Izoh yozing. Masalan: Oylik tushdi")
+    await message.answer("Izoh yozing. Masalan: Oylik tushdi\n\nSummani qayta kiritish uchun /back yozing.")
+
+
+@router.message(AddIncome.note, F.text.casefold() == "/back")
+async def income_note_back(message: Message, state: FSMContext):
+    if not owner_only(message): return
+    await state.set_state(AddIncome.amount)
+    await message.answer("⬅️ Summani qayta kiriting. Masalan: 5000000")
 
 
 @router.message(AddIncome.note)
@@ -150,7 +177,17 @@ async def income_note(message: Message, state: FSMContext):
 async def add_expense_start(message: Message, state: FSMContext):
     if not owner_only(message): return
     await state.set_state(AddExpense.category)
-    await message.answer("Chiqim kategoriyasini tanlang:", reply_markup=inline_list('expense_cat', EXPENSE_CATEGORIES))
+    await message.answer(
+        "Chiqim kategoriyasini tanlang:\n\nOrqaga qaytish uchun /back yozing.",
+        reply_markup=inline_list('expense_cat', EXPENSE_CATEGORIES)
+    )
+
+
+@router.message(AddExpense.category, F.text.casefold() == "/back")
+async def expense_category_back(message: Message, state: FSMContext):
+    if not owner_only(message): return
+    await state.clear()
+    await message.answer("⬅️ Bosh menyuga qaytdingiz.", reply_markup=main_menu())
 
 
 @router.callback_query(F.data.startswith('expense_cat:'))
@@ -158,8 +195,18 @@ async def expense_category(call: CallbackQuery, state: FSMContext):
     category = call.data.split(':', 1)[1]
     await state.update_data(category=category)
     await state.set_state(AddExpense.amount)
-    await call.message.answer("Qancha pul ishlatildi? Masalan: 10000")
+    await call.message.answer("Qancha pul ishlatildi? Masalan: 10000\n\nOrqaga qaytish uchun /back yozing.")
     await call.answer()
+
+
+@router.message(AddExpense.amount, F.text.casefold() == "/back")
+async def expense_amount_back(message: Message, state: FSMContext):
+    if not owner_only(message): return
+    await state.set_state(AddExpense.category)
+    await message.answer(
+        "⬅️ Chiqim kategoriyasini qayta tanlang:",
+        reply_markup=inline_list('expense_cat', EXPENSE_CATEGORIES)
+    )
 
 
 @router.message(AddExpense.amount)
@@ -170,7 +217,14 @@ async def expense_amount(message: Message, state: FSMContext):
         return
     await state.update_data(amount=amount)
     await state.set_state(AddExpense.note)
-    await message.answer("Izoh yozing. Masalan: Gazga")
+    await message.answer("Izoh yozing. Masalan: Gazga\n\nSummani qayta kiritish uchun /back yozing.")
+
+
+@router.message(AddExpense.note, F.text.casefold() == "/back")
+async def expense_note_back(message: Message, state: FSMContext):
+    if not owner_only(message): return
+    await state.set_state(AddExpense.amount)
+    await message.answer("⬅️ Summani qayta kiriting. Masalan: 10000")
 
 
 @router.message(AddExpense.note)
