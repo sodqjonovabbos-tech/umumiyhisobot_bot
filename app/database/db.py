@@ -1,11 +1,27 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import text
-from config import DATABASE_URL
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from config import DATABASE_KIND, DATABASE_URL
 from app.database.models import Base
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+engine_options = {
+    "echo": False,
+    "pool_pre_ping": True,
+}
+
+# PostgreSQL ulanishlarini uzoq ishlaydigan Telegram bot uchun barqaror saqlaydi.
+if DATABASE_KIND == "postgresql":
+    engine_options.update(
+        pool_recycle=1800,
+        pool_size=5,
+        max_overflow=5,
+    )
+
+engine = create_async_engine(DATABASE_URL, **engine_options)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+# Bu migratsiyalar faqat mavjud bo'lmagan jadval/ustunlarni qo'shadi.
+# DROP TABLE yoki eski ma'lumotlarni o'chiradigan buyruq yo'q.
 CREATE_TABLES_SQL = [
     """
     CREATE TABLE IF NOT EXISTS incomes (
@@ -47,21 +63,32 @@ CREATE_TABLES_SQL = [
     """,
 ]
 
+POSTGRES_SAFE_MIGRATIONS = [
+    "ALTER TABLE IF EXISTS debts ADD COLUMN IF NOT EXISTS debt_type VARCHAR(20) DEFAULT 'oldim'",
+    "ALTER TABLE IF EXISTS debts ADD COLUMN IF NOT EXISTS person VARCHAR(150) DEFAULT ''",
+    "ALTER TABLE IF EXISTS incomes ALTER COLUMN amount TYPE BIGINT",
+    "ALTER TABLE IF EXISTS expenses ALTER COLUMN amount TYPE BIGINT",
+    "ALTER TABLE IF EXISTS debts ALTER COLUMN total_amount TYPE BIGINT",
+    "ALTER TABLE IF EXISTS debt_payments ALTER COLUMN amount TYPE BIGINT",
+    "CREATE INDEX IF NOT EXISTS ix_incomes_created_at ON incomes (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_expenses_created_at ON expenses (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_debts_created_at ON debts (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_debt_payments_debt_id ON debt_payments (debt_id)",
+]
+
+
 async def init_db():
-    """PostgreSQL/Railway va lokal SQLite uchun jadvallarni ishonchli yaratadi."""
-    if DATABASE_URL.startswith("postgresql+asyncpg://"):
+    """Bazani tekshiradi; mavjud ma'lumotlarni hech qachon o'chirmaydi."""
+    if DATABASE_KIND == "postgresql":
         async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
             for sql in CREATE_TABLES_SQL:
                 await conn.execute(text(sql))
-            await conn.execute(text("ALTER TABLE IF EXISTS debts ADD COLUMN IF NOT EXISTS debt_type VARCHAR(20) DEFAULT 'oldim'"))
-            await conn.execute(text("ALTER TABLE IF EXISTS debts ADD COLUMN IF NOT EXISTS person VARCHAR(150) DEFAULT ''"))
-            await conn.execute(text("ALTER TABLE IF EXISTS incomes ALTER COLUMN amount TYPE BIGINT"))
-            await conn.execute(text("ALTER TABLE IF EXISTS expenses ALTER COLUMN amount TYPE BIGINT"))
-            await conn.execute(text("ALTER TABLE IF EXISTS debts ALTER COLUMN total_amount TYPE BIGINT"))
-            await conn.execute(text("ALTER TABLE IF EXISTS debt_payments ALTER COLUMN amount TYPE BIGINT"))
-        print("✅ PostgreSQL jadvallari tekshirildi/yaratildi")
+            for sql in POSTGRES_SAFE_MIGRATIONS:
+                await conn.execute(text(sql))
+        print("✅ PostgreSQL ulandi; jadvallar saqlandi va tekshirildi")
         return
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print("✅ SQLite jadvallari tekshirildi/yaratildi")
+    print("✅ Lokal SQLite jadvallari tekshirildi")

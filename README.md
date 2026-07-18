@@ -1,13 +1,24 @@
-# Finance Control Bot
+# Umumiy hisobot Telegram boti
 
-Railway fix:
-- PostgreSQL jadvallari startda majburiy yaratiladi
-- amount maydonlari BIGINT
-- Telegram polling conflict kamaytirish uchun webhook/pending updates tozalanadi
-- Dockerfile qo'shildi, Railway mise xatosini aylanib o'tadi
+Kirim, chiqim va qarzlarni yuritadigan shaxsiy Telegram bot.
 
-Qarzlar bo'limi:
-- "Qarz oldim" orqali kimdan va qancha qarz olingani saqlanadi.
-- "Qarz berdim" orqali qarz mavjud odam tanlanib, qaytarilgan summa yoziladi.
-- To'liq yopilgan qarz faol ro'yxatdan yashiriladi, lekin Excel tarixida saqlanadi.
-- Qarz Excel faylida qarz olish, birovga berilgan eski qarzlar va qarz qaytarishlar alohida varaqlarda chiqadi.
+## Railway uchun tayyor
+
+- PostgreSQL (`asyncpg`) bilan ishlaydi.
+- Railway'da `DATABASE_URL` ulanmasa SQLite'ga yashirincha o'tmaydi — aniq xato beradi.
+- GitHub push/redeploy vaqtida jadvallar o'chirilmaydi.
+- Startda faqat mavjud bo'lmagan jadvallar, ustunlar va indekslar qo'shiladi.
+- `.env`, lokal SQLite va eksport fayllari GitHub'dan himoyalangan.
+
+To'liq yo'riqnoma: `RAILWAY_DEPLOY.md`.
+
+## Railway variables
+
+```text
+BOT_TOKEN=Telegram BotFather tokeni
+OWNER_ID=Telegram raqamli ID
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+```
+
+`DATABASE_URL` qiymatini qo'lda yozish o'rniga Railway `Add Reference` orqali
+Postgres service'dan tanlash tavsiya qilinadi.
