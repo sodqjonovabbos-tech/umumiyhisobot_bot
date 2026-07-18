@@ -170,7 +170,11 @@ async def income_note(message: Message, state: FSMContext):
         session.add(Income(amount=data['amount'], source=data['source'], note=message.text or ''))
         await session.commit()
     await state.clear()
-    await message.answer(f"✅ Kirim saqlandi\n{data['source']}: {money(data['amount'])}\nIzoh: {message.text}", reply_markup=main_menu())
+    await message.answer(
+        f"✅ Kirim saqlandi\n{data['source']}: {money(data['amount'])}\nIzoh: {message.text}\n\n"
+        "❗ Noto'g'ri kiritilgan bo'lsa, oxirgi yozuvni bekor qilish uchun /back yozing.",
+        reply_markup=main_menu()
+    )
 
 
 @router.message(F.text == "➖ Chiqim qo'shish")
@@ -234,7 +238,84 @@ async def expense_note(message: Message, state: FSMContext):
         session.add(Expense(amount=data['amount'], category=data['category'], note=message.text or ''))
         await session.commit()
     await state.clear()
-    await message.answer(f"✅ Chiqim saqlandi\n{data['category']}: {money(data['amount'])}\nIzoh: {message.text}", reply_markup=main_menu())
+    await message.answer(
+        f"✅ Chiqim saqlandi\n{data['category']}: {money(data['amount'])}\nIzoh: {message.text}\n\n"
+        "❗ Noto'g'ri kiritilgan bo'lsa, oxirgi yozuvni bekor qilish uchun /back yozing.",
+        reply_markup=main_menu()
+    )
+
+
+@router.message(F.text.casefold() == "/back")
+async def undo_last_saved_transaction(message: Message, state: FSMContext):
+    """Saqlanib bo'lgan eng oxirgi kirim yoki chiqimni bekor qiladi."""
+    if not owner_only(message):
+        return
+
+    # Boshqa jarayon ochiq bo'lsa, pul yozuvini o'chirmaymiz — jarayonni bekor qilamiz.
+    current_state = await state.get_state()
+    if current_state is not None:
+        await state.clear()
+        await message.answer(
+            "⬅️ Joriy amal bekor qilindi. Bosh menyuga qaytdingiz.",
+            reply_markup=main_menu()
+        )
+        return
+
+    async with SessionLocal() as session:
+        last_income = (await session.execute(
+            select(Income).order_by(Income.created_at.desc(), Income.id.desc()).limit(1)
+        )).scalar_one_or_none()
+        last_expense = (await session.execute(
+            select(Expense).order_by(Expense.created_at.desc(), Expense.id.desc()).limit(1)
+        )).scalar_one_or_none()
+
+        if last_income is None and last_expense is None:
+            await message.answer(
+                "Bekor qilish uchun kirim yoki chiqim topilmadi.",
+                reply_markup=main_menu()
+            )
+            return
+
+        # Ikki jadval ichidan vaqt bo'yicha eng oxirgi saqlangan yozuv tanlanadi.
+        undo_income = False
+        if last_income is not None and last_expense is None:
+            undo_income = True
+        elif last_income is not None and last_expense is not None:
+            undo_income = last_income.created_at >= last_expense.created_at
+
+        if undo_income:
+            amount = last_income.amount
+            title = last_income.source
+            note = last_income.note
+            await session.delete(last_income)
+            kind = "kirim"
+            icon = "➕"
+        else:
+            amount = last_expense.amount
+            title = last_expense.category
+            note = last_expense.note
+            await session.delete(last_expense)
+            kind = "chiqim"
+            icon = "➖"
+
+        await session.commit()
+
+    if undo_income:
+        await state.update_data(source=title)
+        await state.set_state(AddIncome.amount)
+        prompt = "To'g'ri kirim summasini yozing. Masalan: 500000"
+    else:
+        await state.update_data(category=title)
+        await state.set_state(AddExpense.amount)
+        prompt = "To'g'ri chiqim summasini yozing. Masalan: 500000"
+
+    await message.answer(
+        f"↩️ Oxirgi {kind} bekor qilindi.\n"
+        f"{icon} {title}: {money(amount)}\n"
+        f"Izoh: {note or '-'}\n\n"
+        f"{prompt}\n\n"
+        "Boshqa bo'limga qaytish uchun yana /back yozing."
+    )
 
 
 @router.message(F.text == "💳 Qarzlarim")
