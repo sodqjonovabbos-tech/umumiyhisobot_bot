@@ -48,9 +48,8 @@ class AddDebt(StatesGroup):
     note = State()
 
 class PayDebt(StatesGroup):
-    debt_id = State()
+    person = State()
     amount = State()
-    note = State()
 
 class SearchState(StatesGroup):
     query = State()
@@ -326,20 +325,18 @@ async def debts_menu(message: Message):
     kb.button(text="📤 Qarz berdim", callback_data="debt_lend")
     kb.button(text="📋 Qarzlar ro'yxati", callback_data="debt_list")
     kb.button(text="📥 Qarz Excel yuklash", callback_data="debt_excel")
-    kb.button(text="💰 Qarzga to'lov qo'shish", callback_data="debt_pay")
     kb.adjust(1)
     await message.answer("Qarzlar bo'limi:", reply_markup=kb.as_markup())
 
 
-@router.callback_query(F.data.in_({'debt_borrow', 'debt_lend'}))
+@router.callback_query(F.data == 'debt_borrow')
 async def debt_add_type(call: CallbackQuery, state: FSMContext):
-    debt_type = 'oldim' if call.data == 'debt_borrow' else 'berdim'
-    await state.update_data(debt_type=debt_type)
+    if not call.from_user or call.from_user.id != OWNER_ID:
+        await call.answer("Bu amal siz uchun ruxsat etilmagan.", show_alert=True)
+        return
+    await state.update_data(debt_type='oldim')
     await state.set_state(AddDebt.person)
-    if debt_type == 'oldim':
-        await call.message.answer("Kimdan qarz oldingiz? Ismini yozing. Masalan: Ali aka")
-    else:
-        await call.message.answer("Kimga qarz berdingiz? Ismini yozing. Masalan: Vali")
+    await call.message.answer("Kimdan qarz oldingiz? Ismini yozing. Masalan: Ali aka")
     await call.answer()
 
 
@@ -365,7 +362,7 @@ async def debt_amount(message: Message, state: FSMContext):
         return
     await state.update_data(amount=amount)
     await state.set_state(AddDebt.note)
-    await message.answer("Nega qarz oldingiz/berdingiz? Izoh yozing. Masalan: Mashina boshlang'ich to'lovi uchun")
+    await message.answer("Nega qarz oldingiz? Izoh yozing. Masalan: Mashina boshlang'ich to'lovi uchun")
 
 
 @router.message(AddDebt.note)
@@ -393,15 +390,59 @@ async def debt_note(message: Message, state: FSMContext):
     )
 
 
+async def debt_paid_amount(session, debt_id: int) -> int:
+    paid = await session.scalar(
+        select(func.coalesce(func.sum(DebtPayment.amount), 0)).where(
+            DebtPayment.debt_id == debt_id
+        )
+    )
+    return int(paid or 0)
+
+
+async def active_borrowed_people() -> list[dict]:
+    """Qarzimiz bor odamlarni ism bo'yicha guruhlab qaytaradi."""
+    async with SessionLocal() as session:
+        debts = (
+            await session.execute(
+                select(Debt)
+                .where(Debt.debt_type == 'oldim')
+                .order_by(Debt.created_at.asc(), Debt.id.asc())
+            )
+        ).scalars().all()
+
+        people: dict[str, dict] = {}
+        for debt in debts:
+            paid = await debt_paid_amount(session, debt.id)
+            remaining = max(0, int(debt.total_amount) - paid)
+            if remaining <= 0:
+                continue
+
+            person_name = (getattr(debt, 'person', '') or "Noma'lum").strip()
+            person_key = person_name.casefold()
+            if person_key not in people:
+                people[person_key] = {
+                    'key': person_key,
+                    'person': person_name,
+                    'remaining': 0,
+                }
+            people[person_key]['remaining'] += remaining
+
+        return list(people.values())
+
+
 async def debts_text():
     async with SessionLocal() as session:
         debts = (await session.execute(select(Debt).order_by(Debt.id.desc()))).scalars().all()
         if not debts:
-            return "Qarzlar yo'q."
+            return "Faol qarzlar yo'q."
         lines = ["📋 Qarzlar ro'yxati:\n"]
+        visible_count = 0
         for d in debts:
-            paid = await session.scalar(select(func.coalesce(func.sum(DebtPayment.amount), 0)).where(DebtPayment.debt_id == d.id))
-            remain = d.total_amount - int(paid or 0)
+            paid = await debt_paid_amount(session, d.id)
+            remain = max(0, d.total_amount - paid)
+            if remain <= 0:
+                continue
+            visible_count += 1
             turi = "📥 Qarz oldim" if getattr(d, 'debt_type', 'oldim') == 'oldim' else "📤 Qarz berdim"
             kim = "Kimdan" if getattr(d, 'debt_type', 'oldim') == 'oldim' else "Kimga"
             lines.append(
@@ -413,6 +454,8 @@ async def debts_text():
                 f"Qolgan: {money(remain)}\n"
                 f"Izoh: {d.note}\n"
             )
+        if visible_count == 0:
+            return "Faol qarzlar yo'q. Barcha qarzlar to'liq yopilgan."
         return '\n'.join(lines)
 
 
@@ -422,52 +465,152 @@ async def debt_list(call: CallbackQuery):
     await call.answer()
 
 
-@router.callback_query(F.data == 'debt_pay')
+@router.callback_query(F.data.in_({'debt_lend', 'debt_pay'}))
 async def debt_pay_start(call: CallbackQuery, state: FSMContext):
-    async with SessionLocal() as session:
-        debts = (await session.execute(select(Debt).order_by(Debt.id.desc()))).scalars().all()
-    if not debts:
-        await call.message.answer("Avval qarz yarating.")
+    if not call.from_user or call.from_user.id != OWNER_ID:
+        await call.answer("Bu amal siz uchun ruxsat etilmagan.", show_alert=True)
+        return
+
+    people = await active_borrowed_people()
+    if not people:
+        await call.message.answer("Hozir qarz beradigan odam yo'q. Faol qarzlaringiz mavjud emas.")
         await call.answer()
         return
+
     kb = InlineKeyboardBuilder()
-    for d in debts:
-        icon = '📥' if getattr(d, 'debt_type', 'oldim') == 'oldim' else '📤'
-        kb.button(text=f"{icon} #{d.id} {d.name} - {getattr(d, 'person', '')}", callback_data=f"pay_debt:{d.id}")
+    for index, item in enumerate(people):
+        kb.button(
+            text=f"👤 {item['person']} — {money(item['remaining'])}",
+            callback_data=f"pay_person:{index}"
+        )
     kb.adjust(1)
-    await state.set_state(PayDebt.debt_id)
-    await call.message.answer("Qaysi qarzga to'lov qo'shasiz?", reply_markup=kb.as_markup())
+    await state.update_data(debt_people=people)
+    await state.set_state(PayDebt.person)
+    await call.message.answer(
+        "Kimga qarz berdingiz?\n\nQarzingiz bor odamni tanlang:",
+        reply_markup=kb.as_markup()
+    )
     await call.answer()
 
 
-@router.callback_query(F.data.startswith('pay_debt:'))
+@router.callback_query(F.data.startswith('pay_person:'))
 async def pay_debt_pick(call: CallbackQuery, state: FSMContext):
-    debt_id = int(call.data.split(':')[1])
-    await state.update_data(debt_id=debt_id)
+    if not call.from_user or call.from_user.id != OWNER_ID:
+        await call.answer("Bu amal siz uchun ruxsat etilmagan.", show_alert=True)
+        return
+
+    try:
+        index = int(call.data.split(':', 1)[1])
+    except (ValueError, IndexError):
+        await call.answer("Noto'g'ri tanlov.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    people = data.get('debt_people', [])
+    if index < 0 or index >= len(people):
+        await call.answer("Ro'yxat eskirgan. Qaytadan tanlang.", show_alert=True)
+        return
+
+    item = people[index]
+    await state.update_data(
+        person_key=item['key'],
+        person_name=item['person'],
+        person_remaining=item['remaining'],
+    )
     await state.set_state(PayDebt.amount)
-    await call.message.answer("To'langan summani yozing:")
+    await call.message.answer(
+        f"👤 Kimga: {item['person']}\n"
+        f"💳 Hozirgi qarzingiz: {money(item['remaining'])}\n\n"
+        "Qancha qarz berdingiz? Summani yozing.\n"
+        "Masalan: 500000"
+    )
     await call.answer()
 
 
 @router.message(PayDebt.amount)
 async def pay_debt_amount(message: Message, state: FSMContext):
+    if not owner_only(message):
+        return
     amount = parse_amount(message.text or '')
-    if amount is None:
+    if amount is None or amount <= 0:
         await message.answer("Summani faqat raqam bilan yozing.")
         return
-    await state.update_data(amount=amount)
-    await state.set_state(PayDebt.note)
-    await message.answer("Izoh yozing. Masalan: Iyun oyi to'lovi")
-
-
-@router.message(PayDebt.note)
-async def pay_debt_note(message: Message, state: FSMContext):
     data = await state.get_data()
+    person_key = data.get('person_key', '')
+    person_name = data.get('person_name', "Noma'lum")
+
     async with SessionLocal() as session:
-        session.add(DebtPayment(debt_id=data['debt_id'], amount=data['amount'], note=message.text or ''))
+        debts = (
+            await session.execute(
+                select(Debt)
+                .where(Debt.debt_type == 'oldim')
+                .order_by(Debt.created_at.asc(), Debt.id.asc())
+            )
+        ).scalars().all()
+
+        active_debts: list[tuple[Debt, int]] = []
+        total_remaining = 0
+        for debt in debts:
+            debt_person_key = ((getattr(debt, 'person', '') or "Noma'lum").strip()).casefold()
+            if debt_person_key != person_key:
+                continue
+            paid = await debt_paid_amount(session, debt.id)
+            remaining = max(0, int(debt.total_amount) - paid)
+            if remaining > 0:
+                active_debts.append((debt, remaining))
+                total_remaining += remaining
+
+        if total_remaining <= 0:
+            await state.clear()
+            await message.answer(
+                "Bu odamga qarzingiz allaqachon to'liq yopilgan.",
+                reply_markup=main_menu()
+            )
+            return
+
+        if amount > total_remaining:
+            await message.answer(
+                f"❌ Kiritilgan summa qarzdan ko'p.\n"
+                f"Hozirgi qarz: {money(total_remaining)}\n\n"
+                "Qarzdan oshmaydigan summani yozing."
+            )
+            return
+
+        left_to_allocate = amount
+        for debt, remaining in active_debts:
+            if left_to_allocate <= 0:
+                break
+            payment_part = min(left_to_allocate, remaining)
+            session.add(
+                DebtPayment(
+                    debt_id=debt.id,
+                    amount=payment_part,
+                    note=f"{person_name}ga qarz qaytarildi"
+                )
+            )
+            left_to_allocate -= payment_part
+
         await session.commit()
+
+    remaining_after = total_remaining - amount
     await state.clear()
-    await message.answer("✅ Qarz to'lovi saqlandi\n\n" + await debts_text(), reply_markup=main_menu())
+    if remaining_after == 0:
+        result_text = (
+            f"✅ {person_name}ga qarz to'liq berildi.\n"
+            f"To'langan summa: {money(amount)}\n\n"
+            "Bu odam faol qarzlar ro'yxatidan olib tashlandi. "
+            "Qarz tarixi Excel hisobotida saqlanib qoladi."
+        )
+    else:
+        result_text = (
+            f"✅ Qarzning bir qismi berildi.\n"
+            f"Kimga: {person_name}\n"
+            f"To'langan: {money(amount)}\n"
+            f"Qolgan qarz: {money(remaining_after)}\n\n"
+            "Qarz to'liq yopilmagani uchun ro'yxatda qoladi."
+        )
+
+    await message.answer(result_text, reply_markup=main_menu())
 
 
 
@@ -536,9 +679,21 @@ async def create_excel_report(report_type: str = 'all', start: datetime | None =
         ws3.append([x.id, x.created_at.strftime('%Y-%m-%d %H:%M'), turi, getattr(x, 'person', ''), x.name, x.total_amount, paid, x.total_amount - paid, x.note])
 
     ws4 = wb.create_sheet("Qarz to'lovlari")
-    ws4.append(['Sana', 'Qarz ID', 'Summa', 'Izoh'])
+    ws4.append(['Sana', 'Qarz ID', 'Kimga/Kimdan', 'Qarz nomi', 'Turi', 'Summa', 'Izoh'])
+    debts_by_id = {d.id: d for d in debts}
     for x in pays:
-        ws4.append([x.created_at.strftime('%Y-%m-%d %H:%M'), x.debt_id, x.amount, x.note])
+        debt = debts_by_id.get(x.debt_id)
+        debt_type = getattr(debt, 'debt_type', 'oldim') if debt else 'oldim'
+        turi = 'Qarz qaytarildi' if debt_type == 'oldim' else 'Qarz qaytdi'
+        ws4.append([
+            x.created_at.strftime('%Y-%m-%d %H:%M'),
+            x.debt_id,
+            getattr(debt, 'person', '') if debt else '',
+            getattr(debt, 'name', '') if debt else '',
+            turi,
+            x.amount,
+            x.note
+        ])
 
     autosize_sheets(wb)
     wb.save(path)
@@ -549,16 +704,87 @@ async def create_debts_excel() -> Path:
     Path('exports').mkdir(exist_ok=True)
     path = Path('exports') / f"qarzdorlik_{now_tashkent().strftime('%Y_%m_%d_%H_%M')}.xlsx"
     wb = Workbook()
-    ws = wb.active
-    ws.title = 'Qarzdorlik'
-    ws.append(['ID', 'Sana', 'Turi', 'Kimdan/Kimga', 'Nomi', 'Jami summa', "To'langan", 'Qolgan', 'Izoh'])
+
     async with SessionLocal() as session:
         debts = (await session.execute(select(Debt).order_by(Debt.created_at.desc()))).scalars().all()
+        payments = (
+            await session.execute(
+                select(DebtPayment).order_by(DebtPayment.created_at.desc())
+            )
+        ).scalars().all()
+
+        paid_by_debt: dict[int, int] = {}
         for d in debts:
-            paid = await session.scalar(select(func.coalesce(func.sum(DebtPayment.amount), 0)).where(DebtPayment.debt_id == d.id))
-            paid = int(paid or 0)
-            turi = 'Qarz oldim' if getattr(d, 'debt_type', 'oldim') == 'oldim' else 'Qarz berdim'
-            ws.append([d.id, d.created_at.strftime('%Y-%m-%d %H:%M'), turi, getattr(d, 'person', ''), d.name, d.total_amount, paid, d.total_amount - paid, d.note])
+            paid_by_debt[d.id] = await debt_paid_amount(session, d.id)
+
+    debts_by_id = {d.id: d for d in debts}
+
+    ws_borrowed = wb.active
+    ws_borrowed.title = 'Qarz olganlar'
+    ws_borrowed.append([
+        'ID', 'Qarz olingan sana', 'Kimdan', 'Qarz nomi', 'Olingan summa',
+        'Qaytarilgan', 'Qolgan', 'Holati', 'Izoh'
+    ])
+    for d in debts:
+        if getattr(d, 'debt_type', 'oldim') != 'oldim':
+            continue
+        paid = paid_by_debt.get(d.id, 0)
+        remaining = max(0, int(d.total_amount) - paid)
+        status = "To'liq yopilgan" if remaining == 0 else "Qarz mavjud"
+        ws_borrowed.append([
+            d.id,
+            d.created_at.strftime('%Y-%m-%d %H:%M'),
+            getattr(d, 'person', ''),
+            d.name,
+            d.total_amount,
+            paid,
+            remaining,
+            status,
+            d.note
+        ])
+
+    ws_lent = wb.create_sheet('Qarz berganlar')
+    ws_lent.append([
+        'ID', 'Qarz berilgan sana', 'Kimga', 'Qarz nomi', 'Berilgan summa',
+        'Qaytgan', 'Qolgan', 'Holati', 'Izoh'
+    ])
+    for d in debts:
+        if getattr(d, 'debt_type', 'oldim') != 'berdim':
+            continue
+        paid = paid_by_debt.get(d.id, 0)
+        remaining = max(0, int(d.total_amount) - paid)
+        status = "To'liq qaytgan" if remaining == 0 else "Qarz mavjud"
+        ws_lent.append([
+            d.id,
+            d.created_at.strftime('%Y-%m-%d %H:%M'),
+            getattr(d, 'person', ''),
+            d.name,
+            d.total_amount,
+            paid,
+            remaining,
+            status,
+            d.note
+        ])
+
+    ws_payments = wb.create_sheet('Qarz qaytarishlar')
+    ws_payments.append([
+        'To‘lov sanasi', 'Qarz ID', 'Kimga/Kimdan', 'Qarz nomi',
+        'Amal turi', 'To‘langan summa', 'Izoh'
+    ])
+    for payment in payments:
+        debt = debts_by_id.get(payment.debt_id)
+        debt_type = getattr(debt, 'debt_type', 'oldim') if debt else 'oldim'
+        action = 'Qarz berdim (qaytardim)' if debt_type == 'oldim' else 'Qarz qaytdi'
+        ws_payments.append([
+            payment.created_at.strftime('%Y-%m-%d %H:%M'),
+            payment.debt_id,
+            getattr(debt, 'person', '') if debt else '',
+            getattr(debt, 'name', '') if debt else '',
+            action,
+            payment.amount,
+            payment.note
+        ])
+
     autosize_sheets(wb)
     wb.save(path)
     return path
